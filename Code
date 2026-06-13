@@ -1,0 +1,863 @@
+import { useState, useCallback, useMemo, useRef } from "react";
+
+// ─── PALETTE (matched to Hærens etterretningskonsept cover) ──────────────────
+const C = {
+  bg:"#35352B", bgDeep:"#2B2B22", surface:"#3E3E32", panelSolid:"#3A3A2F", card:"#454539",
+  border:"#5A5A48", dimBorder:"#4A4A3C", gold:"#C9A227", goldSoft:"#B8860B", goldPale:"#E8D9A0",
+  cream:"#EDE8D8", paper:"#F2EEE2", ink:"#2B2B22", text:"#E5E0D0", textDim:"#B0AC97", grey:"#908C78",
+  red:"#C0392B", redCrest:"#D52B1E", redDim:"#4A2A24", green:"#7A9B6E", greenDim:"#2E3A26",
+  amber:"#D4A017", amberDim:"#463A1A",
+};
+const STATUS_C={KRITISK:C.red,FORHØYET:C.amber,NORMAL:C.green};
+const KILDE_COL={A:"#9BB88C",B:"#9BB88C",C:C.amber,D:"#D4926A",E:C.red,F:C.grey};
+const TYPE_SYM={"Manøverenhet":"▭","Ildstøtte":"●","C2-node":"◆","Spesialstyrke":"▲"};
+const typeSym=(t)=>TYPE_SYM[t]||"⬡";
+const SCORE_VAL={"++":2,"+":1,"N":0,"–":-1,"––":-2};
+const SCORE_COL={"++":"#9BB88C","+":"#B8CBA8","N":C.grey,"–":"#D4926A","––":C.red};
+const SCORE_BTNS=["++","+","N","–","––"];
+const uid=()=>Math.random().toString(36).slice(2,8);
+const SERIF="'Georgia','Times New Roman',serif";
+const SANS="'Inter','Helvetica Neue',Arial,sans-serif";
+
+const INIT_OBJECTS=[
+  {id:"obj1",name:"1. GardeTankBn",type:"Manøverenhet",loc:"37UMB 4521 8834",styrke:"Bn (~40 KV)",utstyr:"T-90M, BMP-3",aktivitet:"Kolonnebevegelse nord",tid:"09 0340Z",kilde:"B",info:"2",disiplin:"IMINT/SAR",notes:"",x:72,y:38},
+  {id:"obj2",name:"58. Armékorps Arty",type:"Ildstøtte",loc:"37UMB 3112 9201",styrke:"Btry (~6 SPG)",utstyr:"2S19 Msta-S",aktivitet:"Ildstilling etablert",tid:"09 0610Z",kilde:"B",info:"2",disiplin:"SIGINT",notes:"",x:80,y:30},
+  {id:"obj3",name:"RSC-kommandonode Nord",type:"C2-node",loc:"Ukjent/estimert",styrke:"~20 pax",utstyr:"Mobil KP",aktivitet:"Aktiv – ny EM-signatur",tid:"08 2200Z",kilde:"B",info:"1",disiplin:"SIGINT/ELINT",notes:"Potensielt RSC-kjernenode",x:86,y:24},
+  {id:"obj4",name:"8. SF Coy",type:"Spesialstyrke",loc:"Ukjent",styrke:"Coy (~80)",utstyr:"Lett inf.",aktivitet:"Fremskutt klargjøring",tid:"08 1200Z",kilde:"C",info:"3",disiplin:"HUMINT",notes:"",x:60,y:46},
+];
+const INIT_NAI=[
+  {id:"nai1",navn:"NAI-01",x:55,y:42,beskr:"Grensesonen Sør-Varanger"},
+  {id:"nai2",navn:"NAI-02",x:68,y:14,beskr:"Barentshavet"},
+  {id:"nai3",navn:"NAI-03",x:88,y:20,beskr:"Øst for Murmansk"},
+  {id:"nai4",navn:"NAI-04",x:50,y:52,beskr:"Indre Finnmark"},
+  {id:"nai5",navn:"NAI-05",x:84,y:34,beskr:"Pechenga-korridoren"},
+];
+const INIT_IW=[
+  {id:"iw1",tekst:"Økt russisk rekognosering langs grensen",sensor:"SIGINT/IMINT",nai:"NAI-01",status:"FORHØYET",obs:"D-21",avvik:"+40%",pir:"PIR-1",dekket:true},
+  {id:"iw2",tekst:"Uvanlig fartøysaktivitet Barentshavet",sensor:"ELINT/MDA",nai:"NAI-02",status:"FORHØYET",obs:"D-18",avvik:"Mønsteravvik",pir:"PIR-1",dekket:true},
+  {id:"iw3",tekst:"Ny EM-signatur øst for Murmansk",sensor:"SIGINT",nai:"NAI-03",status:"KRITISK",obs:"D-14",avvik:"Ukjent system",pir:"PIR-2",dekket:false},
+  {id:"iw4",tekst:"Informasjonspåvirkning Troms/Finnmark",sensor:"OSINT/HUMINT",nai:"Lokalt",status:"FORHØYET",obs:"D-19",avvik:"↑ narrativ",pir:"PIR-1",dekket:true},
+  {id:"iw5",tekst:"Fremskutt klargjøring SF-elementer",sensor:"HUMINT/IMINT",nai:"NAI-04",status:"KRITISK",obs:"D-10",avvik:"Bekreft 24t",pir:"PIR-1",dekket:false},
+  {id:"iw6",tekst:"Logistikkoppbygging synlig fra rom",sensor:"IMINT/SAR",nai:"NAI-05",status:"NORMAL",obs:"–",avvik:"Ingen",pir:"PIR-1",dekket:true},
+];
+const INIT_HYPO=[
+  {id:"h1",label:"H1",title:"Øvelse / demonstrasjon",color:C.green},
+  {id:"h2",label:"H2",title:"Begrenset provokasjon",color:C.amber},
+  {id:"h3",label:"H3",title:"Strategisk overfall",color:C.red},
+];
+const INIT_BEVIS=[
+  {id:"b1",tekst:"Økt logistikkflyt mot grensen (B2-IMINT)",scores:{h1:"N",h2:"–",h3:"++"},diag:"Høy",kilde:""},
+  {id:"b2",tekst:"Ny EM-signatur – ukjent system",scores:{h1:"N",h2:"+",h3:"++"},diag:"Høy",kilde:"iw3"},
+  {id:"b3",tekst:"Informasjonspåvirkning lokal befolkning",scores:{h1:"–",h2:"+",h3:"++"},diag:"Høy",kilde:"iw4"},
+  {id:"b4",tekst:"Ingen diplomatisk varsling til NATO",scores:{h1:"N",h2:"+",h3:"+"},diag:"Middels",kilde:""},
+  {id:"b5",tekst:"SF-klargjøring observert (C3-HUMINT)",scores:{h1:"+",h2:"++",h3:"++"},diag:"Lav",kilde:"iw5"},
+  {id:"b6",tekst:"Russisk øvelseskalender ikke kunngjort",scores:{h1:"–",h2:"+",h3:"++"},diag:"Høy",kilde:""},
+  {id:"b7",tekst:"Kola-baser på normal beredskap (ELINT)",scores:{h1:"++",h2:"N",h3:"–"},diag:"Høy",kilde:""},
+];
+const INIT_CARVER=[
+  {id:"c1",objId:"obj3",name:"RSC-kommandonode Nord",C:9,A:7,R:5,V:8,E:9,Rec:8},
+  {id:"c2",objId:"obj2",name:"58. Armékorps Arty",C:8,A:6,R:4,V:7,E:8,Rec:9},
+  {id:"c3",objId:"obj1",name:"1. GardeTankBn",C:7,A:8,R:6,V:7,E:7,Rec:8},
+  {id:"c4",objId:"obj4",name:"8. SF Coy",C:6,A:5,R:7,V:6,E:9,Rec:5},
+];
+const INIT_IPB={
+  s1:"AO: Øst-Finnmark, grensesonen Sør-Varanger–Tana. AI: Kola-halvøya, Pechenga, Murmansk oblast, Barentshavet. Tidsvindu D-30 → D+7.",
+  s2:"Terreng (OAKOC): Begrenset veinett kanaliserer mekanisert bevegelse til E6 og fylkesveinettet. Vinterforhold gir mobilitet over frossen mark, men begrenset sikt. Mørketid favoriserer termiske sensorer. LOC sårbare ved Tana bru.",
+  s3:"Trussel: Russisk landmakt offensivt innrettet, men nordstyrker primært defensive. RSC modnet siden 2022 — nettverkssentrisk målsyklus på minutter. HVT: RSC-kommandonoder, EW-noder, langtrekkende ild. Mønster: posisjonering forut for strategisk overfall.",
+};
+
+// ── Red Team: fiendens informasjonsbehov (det fienden trenger å vite om OSS) ──
+const INIT_EPIR=[
+  {id:"ep1",tekst:"Hvor er norske/allierte landstyrker gruppert og i hvilken beredskap?",mot:"Egne manøveravdelinger, mobiliseringsgrad",ccir:"Fienden trenger dette for å velge angrepsakse og unngå sterke punkter"},
+  {id:"ep2",tekst:"Hvor ligger allierte sensorer, EK-noder og langtrekkende ild?",mot:"Egen ISTAR og ildkraft (RSC-mål for fienden)",ccir:"Forutsetning for å nøytralisere vår sensor-effektorkjede først"},
+  {id:"ep3",tekst:"Når og hvor ankommer allierte forsterkninger (mottak)?",mot:"Mottaksområder, havner, flyplasser, forhåndslagring",ccir:"Avgjør fiendens tidsvindu før alliert tyngde er på plass"},
+  {id:"ep4",tekst:"Hva er NATOs politiske terskel og responsvilje?",mot:"Beslutningstakere, nasjonal samhørighet i Norden",ccir:"Styrer fiendens valg mellom gråsone og åpen aksjon"},
+];
+const INIT_EDP=[
+  {id:"ed1",navn:"DP-A · Velg angrepsakse",beskr:"Fienden velger hovedakse basert på hvor våre styrker er svakest gruppert.",knyttet:"ep1",nlt:"D-2",coa:"H2/H3",tiltak:"Villedning av egen gruppering; signaturforvaltning som skjuler tyngdepunkt"},
+  {id:"ed2",navn:"DP-B · Iverksett RSC mot alliert ISTAR",beskr:"Fienden slår mot vår sensor-effektorkjede idet den er lokalisert.",knyttet:"ep2",nlt:"D-1",coa:"H3",tiltak:"EMCON, redundans i sensorer, distribuert PED"},
+  {id:"ed3",navn:"DP-C · Eskalér før alliert mottak fullført",beskr:"Fienden må handle før allierte forsterkninger er operative.",knyttet:"ep3",nlt:"D+0",coa:"H3",tiltak:"Beskytt og skjul mottaksdata; fremskyt nordisk forsterkning"},
+];
+const INIT_EOPS={
+  intent:"Oppnå et hurtig, avgrenset fait accompli i Finnmark som splitter NATO politisk og skaper forhandlingskort, før alliert tyngde er på plass.",
+  schwerpunkt:"Nøytralisering av alliert ISTAR og langtrekkende ild (vår RSC-ekvivalent) for å oppnå lokal beslutningsoverlegenhet.",
+  faser:"Fase 0: Posisjonering og gråsone (D-30→D-7). Fase 1: Klargjøring under kort varslingstid (D-7→D0). Fase 2: Hurtig avgrenset aksjon + RSC-kampanje (D+0→).",
+  forutsetninger:"Forutsetter: vellykket fusion og fungerende RSC, splittet NATO-respons, og at norsk innhenting ikke avdekker mønsteret i tide.",
+  sarbarhet:"Sårbar dersom: nordisk-alliert varsling fungerer i fase 0, alliert mottak skjer raskere enn antatt, eller egen RSC degraderes av norsk signaturforvaltning og kontra-ISTAR.",
+};
+
+// ─── PRIMITIVES ───────────────────────────────────────────────────────────────
+function Eyebrow({children,color=C.gold}){return <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.22em",color,textTransform:"uppercase",fontFamily:SANS}}>{children}</div>;}
+function Pill({label,color}){const c=color||STATUS_C[label]||C.gold;return <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.1em",padding:"2px 8px",borderRadius:2,background:c+"22",color:c,border:`1px solid ${c}55`,fontFamily:SANS,textTransform:"uppercase"}}>{label}</span>;}
+function GoldRule({w=48,style={}}){return <div style={{height:2,width:w,background:C.gold,...style}}/>;}
+function Sec({eyebrow,title,sub,children}){return(<section style={{marginBottom:34}}><div style={{marginBottom:18}}><Eyebrow>{eyebrow}</Eyebrow><h2 style={{margin:"6px 0 4px 0",fontSize:26,fontWeight:400,color:C.cream,fontFamily:SERIF,letterSpacing:"0.01em"}}>{title}</h2>{sub&&<div style={{fontSize:13,color:C.textDim,fontFamily:SANS,fontStyle:"italic"}}>{sub}</div>}<GoldRule style={{marginTop:12}}/></div>{children}</section>);}
+function Input({value,onChange,placeholder,style={}}){return <input value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:3,padding:"7px 11px",color:C.text,fontSize:13,outline:"none",fontFamily:SANS,...style}} onFocus={e=>e.target.style.borderColor=C.gold} onBlur={e=>e.target.style.borderColor=C.border}/>;}
+function TArea({value,onChange,style={}}){return <textarea value={value} onChange={e=>onChange(e.target.value)} style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:3,padding:"10px 13px",color:C.text,fontSize:13,outline:"none",fontFamily:SANS,lineHeight:1.65,resize:"vertical",width:"100%",boxSizing:"border-box",...style}} onFocus={e=>e.target.style.borderColor=C.gold} onBlur={e=>e.target.style.borderColor=C.border}/>;}
+function Select({value,onChange,options,style={}}){return <select value={value} onChange={e=>onChange(e.target.value)} style={{background:C.panelSolid,border:`1px solid ${C.border}`,borderRadius:3,padding:"7px 10px",color:C.text,fontSize:13,outline:"none",fontFamily:SANS,cursor:"pointer",...style}}>{options.map(o=><option key={o.value||o} value={o.value||o} style={{background:C.panelSolid}}>{o.label||o}</option>)}</select>;}
+function Btn({children,onClick,variant="ghost",style={}}){const base={fontFamily:SANS,cursor:"pointer",fontWeight:600,fontSize:12,borderRadius:3,padding:"7px 15px",transition:"all 0.12s",letterSpacing:"0.04em"};const v={primary:{background:C.gold,color:C.ink,border:"none"},danger:{background:"transparent",color:C.red,border:`1px solid ${C.red}44`},ghost:{background:"transparent",color:C.goldPale,border:`1px solid ${C.border}`}};return <button onClick={onClick} style={{...base,...v[variant],...style}}>{children}</button>;}
+function ScoreBtn({val,current,onChange}){const a=current===val;return <button onClick={()=>onChange(val)} style={{fontFamily:SANS,cursor:"pointer",fontWeight:700,fontSize:12,width:34,height:27,borderRadius:3,border:"none",transition:"all 0.1s",background:a?SCORE_COL[val]+"2E":C.bgDeep,color:a?SCORE_COL[val]:C.grey,outline:a?`1px solid ${SCORE_COL[val]}`:"none"}}>{val}</button>;}
+function Card({children,style={},accent}){return <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:5,borderTop:accent?`2px solid ${accent}`:undefined,padding:"15px 17px",...style}}>{children}</div>;}
+
+// ─── APP ──────────────────────────────────────────────────────────────────────
+export default function App(){
+  const [sak,setSak]=useState({title:"Øst-Finnmark · Russisk posisjonering",analytiker:"S-2 Div",dato:new Date().toISOString().slice(0,10),pir1:"Motstanderens intensjon i Øst-Finnmark",pir2:"Kapabilitet og status russisk rekognoserings-ildgivningskompleks (RSC)"});
+  const [objects,setObjects]=useState(INIT_OBJECTS);
+  const [iwItems,setIw]=useState(INIT_IW);
+  const [hypos,setHypos]=useState(INIT_HYPO);
+  const [bevis,setBevis]=useState(INIT_BEVIS);
+  const [carver,setCarver]=useState(INIT_CARVER);
+  const [naiList,setNai]=useState(INIT_NAI);
+  const [placing,setPlacing]=useState(null);
+  const [ePir,setEpir]=useState(INIT_EPIR);
+  const [eDp,setEdp]=useState(INIT_EDP);
+  const [eOps,setEops]=useState(INIT_EOPS);
+  const [eIcp,setEicp]=useState([]);
+  const [ipb,setIpb]=useState(INIT_IPB);
+  const [icp,setIcp]=useState([]);
+  const [kiDone,setKiDone]=useState({});
+  const [tab,setTab]=useState("DASH");
+  const [showIntsum,setShowIntsum]=useState(false);
+  const [newObj,setNewObj]=useState({name:"",type:"",loc:"",styrke:"",utstyr:"",aktivitet:"",kilde:"B",info:"2",disiplin:"SIGINT",notes:""});
+  const [newIw,setNewIw]=useState({tekst:"",sensor:"",nai:"",status:"NORMAL",pir:"PIR-1"});
+  const [newBevis,setNewBevis]=useState({tekst:"",diag:"Middels"});
+  const fileInputRef=useRef(null);
+
+  const hypoScores=useMemo(()=>{const s={};hypos.forEach(h=>{s[h.id]=bevis.reduce((a,b)=>a+(SCORE_VAL[b.scores[h.id]]||0),0);});return s;},[bevis,hypos]);
+  const bestH=useMemo(()=>hypos.reduce((b,h)=>hypoScores[h.id]>(b?hypoScores[b.id]:-Infinity)?h:b,null),[hypoScores,hypos]);
+  const worstH=useMemo(()=>hypos.reduce((b,h)=>hypoScores[h.id]<(b?hypoScores[b.id]:Infinity)?h:b,null),[hypoScores,hypos]);
+  const fhem=useMemo(()=>hypos.find(h=>h.id!==bestH?.id&&h.id!==worstH?.id)||hypos[hypos.length-1],[hypos,bestH,worstH]);
+  const carverSorted=useMemo(()=>[...carver].map(r=>({...r,sum:r.C+r.A+r.R+r.V+r.E+r.Rec})).sort((a,b)=>b.sum-a.sum),[carver]);
+  const kritiske=iwItems.filter(i=>i.status==="KRITISK");
+  const udekket=iwItems.filter(i=>!i.dekket);
+
+  const kiKeys=["treningsdata","explainability","proveniens","villedning","datasilo","ttp","ach"];
+  const kiLabels=["Treningsdata relevant for trusselen?","Modellen kan forklare konklusjonen?","Kildeproveniens og metadata komplett?","Kan mønster være motstanders villedning?","Treningsdata er skarp – ikke øvingsdata?","Analytiker har nok kunnskap om russisk TTP?","Output testet mot ACH?"];
+  const kiActions=["Flagg bias, gjennomfør kompenseringsanalyse","Gå til manuell analyse – ikke bruk i målprosess","Innhent manglende metadata før bruk","Gjennomfør Red Team-øvelse","Verifiser data-silo-integritet","Konsulter fagekspert / doktrinedatabase","Send til ACH og gjennomfør scoring"];
+  const kiDoneCount=kiKeys.filter(k=>kiDone[k]).length;
+  const kiOk=kiDoneCount===kiKeys.length;
+
+  const generateICP=useCallback(()=>{
+    const sensorFor=(iw)=>{const s=(iw.sensor||"").toUpperCase();
+      if(s.includes("HUMINT"))return["HUMINT (EREG)","UAV-Eskadron"];
+      if(s.includes("SIGINT")||s.includes("ELINT"))return["SIGINT Bn EK","Finsk SIGINT"];
+      if(s.includes("SAR")||s.includes("IMINT"))return["SAR-satellitt","Alliert IMINT"];
+      if(s.includes("MDA"))return["MDA kystovervåking","Alliert IMINT"];
+      if(s.includes("OSINT"))return["OSINT (alliert)"];
+      return["SAR-satellitt","SIGINT Bn EK"];};
+    const ltiovFor=(iw)=>iw.status==="KRITISK"?"D-3 18:00Z":iw.status==="FORHØYET"?"D-5 06:00Z":"Løpende";
+    // EEI/IR — bryt hver SIR ned i konkrete informasjonskrav (hva, hvor, når, hvor mange)
+    const eeiFor=(iw)=>{
+      const t=(iw.tekst||"").toLowerCase();
+      const base=[];
+      if(t.includes("rekognosering")) base.push("Antall og type rekognoseringselementer langs grensen","Bevegelsesmønster og tidspunkt for rekognosering","Tilknytning til overordnet avdeling");
+      else if(t.includes("fartøy")||t.includes("barents")) base.push("Antall, type og klasse fartøy","Kurs, fart og sannsynlig destinasjon","Avvik fra normalt seilingsmønster");
+      else if(t.includes("em-signatur")||t.includes("em ")||t.includes("signatur")) base.push("Frekvensbånd og emitterkarakteristikk","Geolokasjon av emitter (DF-fiks)","Korrelasjon mot kjent russisk systembibliotek");
+      else if(t.includes("informasjonspåvirkning")||t.includes("narrativ")) base.push("Plattformer og kanaler benyttet","Målgruppe og narrativinnhold","Attribusjon til statlig/proxy-aktør");
+      else if(t.includes("sf")||t.includes("spesialstyrke")||t.includes("klargjøring")) base.push("Lokasjon og styrke på SF-element","Logistikk- og innsettingsforberedelser","Sannsynlig oppdragstype og tidsvindu");
+      else if(t.includes("logistikk")) base.push("Volum og type forsyninger","Oppmarsj- og lagringsområder","Endring i logistikktempo over tid");
+      else base.push("Bekreftelse av observasjon (positiv ID)","Lokasjon, styrke og aktivitet","Endring over tid mot normalbilde");
+      return base;
+    };
+    const targets=iwItems.filter(i=>!i.dekket||i.status==="KRITISK");
+    const rows=targets.map(iw=>({id:uid(),pir:iw.pir,sir:iw.tekst,eei:eeiFor(iw),nai:iw.nai,sensors:sensorFor(iw).join(" / "),method:"3R: redundans + miks + cueing",ltiov:ltiovFor(iw),prioritet:iw.status==="KRITISK"?"1 – Kritisk":iw.dekket?"3 – Rutine":"2 – Forhøyet",iwId:iw.id}));
+    rows.sort((a,b)=>a.prioritet.localeCompare(b.prioritet));
+    setIcp(rows);setTab("ICP");
+  },[iwItems]);
+
+  // ── Generer fiendens ICP: hvordan motstanderen samler inn mot OSS ──
+  const generateEnemyICP=useCallback(()=>{
+    const enemySensorFor=(t)=>{
+      t=t.toLowerCase();
+      if(t.includes("sensor")||t.includes("ek-node")||t.includes("ild")) return ["Russisk SIGINT/ELINT (Kola)","Tu-214R ISR-fly","Romkapasitet (Persona/Bars-M)"];
+      if(t.includes("forsterkning")||t.includes("mottak")) return ["Satellitt-IMINT","GUGI undervann (kabler/havner)","Agentnettverk (HUMINT)"];
+      if(t.includes("terskel")||t.includes("respons")||t.includes("politisk")) return ["Påvirkningsapparat/OSINT","Cyber mot beslutningsnettverk","Diplomatisk rapportering"];
+      return ["Russisk SIGINT","UAV-rekognosering","HUMINT/agentnett"];
+    };
+    const eeiFor=(p)=>{
+      const t=p.tekst.toLowerCase();
+      if(t.includes("gruppert")) return ["Lokasjon og styrke på norske/allierte bataljoner","Beredskapsgrad og mobiliseringstempo","Reservers plassering og fremrykningsruter"];
+      if(t.includes("sensorer")||t.includes("ild")) return ["Posisjon på allierte EK-noder og radarer","Lokasjon langtrekkende ild (HIMARS o.l.)","Sensor-effektor-kjedens reaksjonstid"];
+      if(t.includes("forsterkning")||t.includes("mottak")) return ["Havner/flyplasser i bruk for mottak","Tidsplan for alliert deployering","Forhåndslagre og deres bevoktning"];
+      return ["Beslutningstakeres terskel og samhold","Sprekker i nordisk-alliert samordning","Hjemlig politisk vilje til respons"];
+    };
+    const rows=ePir.map((p,i)=>({id:uid(),epir:p.tekst,mot:p.mot,eei:eeiFor(p),sensors:enemySensorFor(p.tekst).join(" / "),ltiov:i===0?"D-2":i===1?"D-1":"D+0",prioritet:i<2?"1 – Avgjørende":"2 – Viktig"}));
+    setEicp(rows);
+  },[ePir]);
+
+  const addObject=()=>{if(!newObj.name)return;setObjects(p=>[...p,{...newObj,id:uid(),tid:new Date().toISOString().slice(11,16)+"Z",x:50,y:50}]);setNewObj({name:"",type:"",loc:"",styrke:"",utstyr:"",aktivitet:"",kilde:"B",info:"2",disiplin:"SIGINT",notes:""});};
+  const sendObjToAch=(o)=>{if(bevis.find(b=>b.kilde===o.id))return;setBevis(p=>[...p,{id:uid(),tekst:`${o.name} – ${o.aktivitet} [${o.disiplin}]`,scores:Object.fromEntries(hypos.map(h=>[h.id,"N"])),diag:"Middels",kilde:o.id}]);setTab("ACH");};
+  const sendObjToCarver=(o)=>{if(!carver.find(c=>c.objId===o.id))setCarver(p=>[...p,{id:uid(),objId:o.id,name:o.name,C:5,A:5,R:5,V:5,E:5,Rec:5}]);setTab("CARVER");};
+  const addIw=()=>{if(!newIw.tekst)return;setIw(p=>[...p,{...newIw,id:uid(),obs:"Nå",avvik:"Ny",dekket:false}]);setNewIw({tekst:"",sensor:"",nai:"",status:"NORMAL",pir:"PIR-1"});};
+  const sendIwToAch=(iw)=>{if(bevis.find(b=>b.kilde===iw.id))return;setBevis(p=>[...p,{id:uid(),tekst:`${iw.tekst} [${iw.sensor}]`,scores:Object.fromEntries(hypos.map(h=>[h.id,"N"])),diag:"Middels",kilde:iw.id}]);};
+  const updateScore=useCallback((bId,hId,v)=>setBevis(p=>p.map(b=>b.id===bId?{...b,scores:{...b.scores,[hId]:v}}:b)),[]);
+  const updateCarver=(id,f,v)=>{const n=Math.max(0,Math.min(10,Number(v)||0));setCarver(p=>p.map(r=>r.id===id?{...r,[f]:n}:r));};
+
+  // ── Eksport / import av hele saken ──
+  const exportSak=()=>{
+    const payload={app:"haeren-etterretningsverktoy",version:1,exportert:new Date().toISOString(),sak,objects,iwItems,hypos,bevis,carver,naiList,ipb,icp,kiDone,ePir,eDp,eOps,eIcp};
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    const safe=(sak.title||"sak").replace(/[^a-z0-9æøå]+/gi,"_").slice(0,40);
+    a.href=url; a.download=`etterretningssak_${safe}_${sak.dato}.json`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  };
+  const importSak=(file)=>{
+    if(!file)return;
+    const reader=new FileReader();
+    reader.onload=e=>{
+      try{
+        const d=JSON.parse(e.target.result);
+        if(d.app!=="haeren-etterretningsverktoy"){alert("Filen er ikke en gyldig etterretningssak.");return;}
+        if(!window.confirm("Importer saken? Dette erstatter alt gjeldende arbeid i appen."))return;
+        if(d.sak)setSak(d.sak);
+        if(d.objects)setObjects(d.objects);
+        if(d.iwItems)setIw(d.iwItems);
+        if(d.hypos)setHypos(d.hypos);
+        if(d.bevis)setBevis(d.bevis);
+        if(d.carver)setCarver(d.carver);
+        if(d.naiList)setNai(d.naiList);
+        if(d.ePir)setEpir(d.ePir);
+        if(d.eDp)setEdp(d.eDp);
+        if(d.eOps)setEops(d.eOps);
+        if(d.eIcp)setEicp(d.eIcp);
+        if(d.ipb)setIpb(d.ipb);
+        if(d.icp)setIcp(d.icp);
+        if(d.kiDone)setKiDone(d.kiDone);
+        setTab("IPOE");
+      }catch(err){alert("Kunne ikke lese filen: "+err.message);}
+    };
+    reader.readAsText(file);
+  };
+  const exportIntsum=()=>{
+    const L=[];
+    L.push("TJENSTLIG");
+    L.push("INTELLIGENCE SUMMARY · INTSUM");
+    L.push("="+"=".repeat(50));
+    L.push("Sak:         "+sak.title);
+    L.push("Dato:        "+sak.dato);
+    L.push("Analytiker:  "+sak.analytiker);
+    L.push("Gradering:   UGRADERT");
+    L.push("");
+    L.push("PRIORITERTE ETTERRETNINGSBEHOV");
+    L.push("  PIR-1: "+sak.pir1);
+    L.push("  PIR-2: "+sak.pir2);
+    L.push("");
+    L.push("INDIKASJONSSTATUS");
+    ["KRITISK","FORHØYET","NORMAL"].forEach(s=>{
+      const it=iwItems.filter(i=>i.status===s);
+      if(it.length){L.push("  "+s+" ("+it.length+"):");it.forEach(i=>L.push("    · "+i.tekst+" — "+i.sensor+", "+i.obs));}
+    });
+    L.push("");
+    L.push("HANDLEMÅTER");
+    L.push("  MSHEM: "+(bestH?.title||"–")+"  (ACH +"+(bestH?hypoScores[bestH.id]:0)+")");
+    L.push("  FHEM:  "+(fhem?.title||"–")+"  (vurderes uavhengig av score)");
+    L.push("");
+    if(carverSorted[0]){L.push("HØYEST PRIORITERT MÅL (CARVER)");L.push("  "+carverSorted[0].name+" — sum "+carverSorted[0].sum+"/60");L.push("");}
+    if(icp.length){L.push("INNHENTINGSPLAN ("+icp.length+" oppdrag)");icp.forEach(r=>{L.push("  · "+r.pir+" | "+r.nai+" | SIR: "+r.sir);(r.eei||[]).forEach((e,i)=>L.push("        EEI "+(i+1)+": "+e));L.push("        Sensor: "+r.sensors+" — LTIOV "+r.ltiov+" — "+r.prioritet);});L.push("");}
+    L.push("ORDER OF BATTLE ("+objects.length+" objekter)");
+    objects.forEach(o=>L.push("  · "+o.name+" — "+o.aktivitet+" — "+o.kilde+o.info+"/"+o.disiplin+" — "+o.loc));
+    L.push("");
+    L.push("KI-KONTROLL: "+(kiOk?"GODKJENT – output validert":"IKKE FULLSTENDIG ("+kiDoneCount+"/7)"));
+    L.push("");
+    L.push("RED TEAM · FIENDENS DESIGN");
+    L.push("  Intensjon: "+eOps.intent);
+    L.push("  Tyngdepunkt: "+eOps.schwerpunkt);
+    L.push("  Beslutningspunkter:");
+    eDp.forEach(d=>L.push("    · "+d.navn+" (NLT "+d.nlt+", COA "+d.coa+") — motrespons: "+d.tiltak));
+    L.push("  Sårbarheter vi kan utnytte: "+eOps.sarbarhet);
+    L.push("");
+    L.push("TJENSTLIG");
+    const blob=new Blob([L.join("\n")],{type:"text/plain;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    const safe=(sak.title||"sak").replace(/[^a-z0-9æøå]+/gi,"_").slice(0,40);
+    a.href=url; a.download=`INTSUM_${safe}_${sak.dato}.txt`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  };
+
+  const TABS=[
+    {id:"DASH",label:"Dashbord"},
+    {id:"IPOE",label:"IPOE"},
+    {id:"OBI",label:"OB-Objekter",count:objects.length},
+    {id:"KART",label:"Situasjonskart",count:objects.length},
+    {id:"IW",label:"I&W",count:kritiske.length,alert:kritiske.length>0},
+    {id:"ACH",label:"ACH / COA",count:bevis.length},
+    {id:"CARVER",label:"CARVER",count:carver.length},
+    {id:"ICP",label:"Innhentingsplan",count:icp.length||null},
+    {id:"REDTEAM",label:"Red Team",count:eDp.length},
+    {id:"KI",label:"KI-kontroll",count:`${kiDoneCount}/7`},
+  ];
+  const th={padding:"9px 12px",textAlign:"left",fontSize:10,color:C.goldPale,fontWeight:700,letterSpacing:"0.1em",textTransform:"uppercase",fontFamily:SANS,borderBottom:`1px solid ${C.gold}55`};
+  const td={padding:"9px 12px",fontSize:12.5,color:C.text,fontFamily:SANS,borderBottom:`1px solid ${C.dimBorder}`,verticalAlign:"top",lineHeight:1.5};
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:SANS}}>
+      <div style={{position:"fixed",inset:0,background:`radial-gradient(ellipse at 50% 0%, ${C.surface}99 0%, transparent 60%)`,pointerEvents:"none",zIndex:0}}/>
+      <div style={{textAlign:"center",padding:"6px 0 5px",borderBottom:`1px solid ${C.gold}44`,position:"relative",zIndex:1}}><span style={{fontSize:10,letterSpacing:"0.4em",color:C.gold,fontWeight:700,fontFamily:SANS}}>T J E N S T L I G</span></div>
+
+      <header style={{padding:"16px 30px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,background:C.bg+"F2",backdropFilter:"blur(8px)",borderBottom:`1px solid ${C.border}`}}>
+        <div style={{display:"flex",alignItems:"center",gap:16}}>
+          <div style={{width:32,height:38,background:C.redCrest,borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",border:`1.5px solid ${C.gold}`,boxShadow:"0 2px 6px rgba(0,0,0,0.3)"}}><span style={{color:C.gold,fontSize:18,fontWeight:900,fontFamily:SERIF}}>♦</span></div>
+          <div><Eyebrow>Hærens Etterretning</Eyebrow><div style={{fontFamily:SERIF,fontSize:19,color:C.cream,fontWeight:400,letterSpacing:"0.02em",lineHeight:1.1}}>Analytisk Verktøysystem</div></div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          {kritiske.length>0&&<span style={{fontSize:11,fontWeight:700,color:C.red,background:C.redDim,padding:"4px 11px",borderRadius:2,border:`1px solid ${C.red}55`,fontFamily:SANS,animation:"pulse 2.4s infinite"}}>⚠ {kritiske.length} KRITISK</span>}
+          <input ref={fileInputRef} type="file" accept="application/json,.json" style={{display:"none"}} onChange={e=>{importSak(e.target.files[0]);e.target.value="";}}/>
+          <Btn onClick={()=>fileInputRef.current?.click()}>Importer sak</Btn>
+          <Btn onClick={exportSak}>Eksporter sak</Btn>
+          <Btn onClick={()=>setShowIntsum(true)} variant="primary">Generer INTSUM</Btn>
+        </div>
+      </header>
+
+      <div style={{padding:"13px 30px",background:C.panelSolid,borderBottom:`1px solid ${C.border}`,position:"relative",zIndex:1,display:"flex",gap:26,flexWrap:"wrap",alignItems:"center"}}>
+        <div><Eyebrow>Sak</Eyebrow><input value={sak.title} onChange={e=>setSak(p=>({...p,title:e.target.value}))} style={{background:"transparent",border:"none",color:C.gold,fontWeight:400,fontSize:16,fontFamily:SERIF,outline:"none",width:330,marginTop:2}}/></div>
+        <div style={{flex:1,minWidth:280}}><Eyebrow>PIR-1</Eyebrow><input value={sak.pir1} onChange={e=>setSak(p=>({...p,pir1:e.target.value}))} style={{background:"transparent",border:"none",borderBottom:`1px solid ${C.dimBorder}`,color:C.text,fontSize:12.5,fontFamily:SANS,outline:"none",width:"100%",paddingBottom:2,marginTop:4}}/></div>
+        <div style={{flex:1,minWidth:280}}><Eyebrow>PIR-2</Eyebrow><input value={sak.pir2} onChange={e=>setSak(p=>({...p,pir2:e.target.value}))} style={{background:"transparent",border:"none",borderBottom:`1px solid ${C.dimBorder}`,color:C.text,fontSize:12.5,fontFamily:SANS,outline:"none",width:"100%",paddingBottom:2,marginTop:4}}/></div>
+        <div style={{textAlign:"right"}}><div style={{fontSize:11,color:C.textDim,fontFamily:SANS}}>{sak.dato}</div><div style={{fontSize:11,color:C.textDim,fontFamily:SANS}}>{sak.analytiker}</div></div>
+      </div>
+
+      <div style={{padding:"0 30px",background:C.surface,borderBottom:`1px solid ${C.border}`,position:"relative",zIndex:1,display:"flex",gap:0,overflowX:"auto"}}>
+        {TABS.map(t=>(<button key={t.id} onClick={()=>setTab(t.id)} style={{fontFamily:SANS,cursor:"pointer",padding:"13px 17px",fontSize:12,fontWeight:600,letterSpacing:"0.05em",whiteSpace:"nowrap",background:"transparent",border:"none",borderBottom:tab===t.id?`2px solid ${C.gold}`:"2px solid transparent",color:tab===t.id?C.gold:C.textDim,transition:"all 0.1s",display:"flex",alignItems:"center",gap:7}}>{t.label}{(t.count!=null)&&<span style={{fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:2,background:t.alert?C.redDim:C.bgDeep,color:t.alert?C.red:C.textDim}}>{t.count}</span>}</button>))}
+      </div>
+
+      <div style={{padding:"30px",maxWidth:1380,margin:"0 auto",position:"relative",zIndex:1}}>
+
+        {tab==="DASH"&&(()=>{
+          const phaseColor=kritiske.length>=2?C.red:kritiske.length===1?C.amber:C.green;
+          const phaseText=kritiske.length>=2?"FASE 0→1 · Trigger nådd":kritiske.length===1?"FASE 0 · Forhøyet aktivitet":"FASE 0 · Løpende overvåking";
+          const cards=[
+            {id:"IPOE",label:"IPOE",sub:"Forberedelse av operasjonsmiljøet",stat:`MSHEM: ${bestH?.title||"–"}`,statC:C.green,icon:"◵"},
+            {id:"OBI",label:"Order of Battle",sub:"Objektbasert etterretning",stat:`${objects.length} objekter sporet`,statC:C.goldPale,icon:"▭"},
+            {id:"KART",label:"Situasjonskart",sub:"Common Operational Picture",stat:`${objects.length} enheter plottet · ${naiList.length} NAI`,statC:C.goldPale,icon:"◬"},
+            {id:"IW",label:"Indikasjon & Varsling",sub:"Fase 0–1 overvåking",stat:`${kritiske.length} kritisk · ${udekket.length} udekket`,statC:kritiske.length>0?C.red:C.green,icon:"◉",alert:kritiske.length>0},
+            {id:"ACH",label:"ACH / Handlemåter",sub:"Konkurrerende hypoteser",stat:`${bevis.length} bevis · MSHEM +${bestH?hypoScores[bestH.id]:0}`,statC:C.amber,icon:"⊞"},
+            {id:"CARVER",label:"CARVER",sub:"Målprioritering",stat:carverSorted[0]?`Topp: ${carverSorted[0].name} (${carverSorted[0].sum})`:"Ingen mål",statC:C.green,icon:"⊕"},
+            {id:"ICP",label:"Innhentingsplan",sub:"Intelligence Collection Plan",stat:icp.length?`${icp.length} oppdrag aktive`:"Ikke generert",statC:icp.length?C.green:C.grey,icon:"⤳"},
+            {id:"REDTEAM",label:"Red Team",sub:"Fiendens design & beslutninger",stat:`${ePir.length} EPIR · ${eDp.length} beslutningspunkt`,statC:C.red,icon:"⚑"},
+            {id:"KI",label:"KI-kontroll",sub:"Validering av maskinassistanse",stat:kiOk?"Godkjent":`${kiDoneCount}/7 utført`,statC:kiOk?C.green:C.red,icon:"⚙"},
+          ];
+          const flow=[
+            {id:"IPOE",n:"1",t:"IPOE"},{id:"IW",n:"2",t:"I&W"},{id:"ICP",n:"3",t:"Innhenting"},
+            {id:"OBI",n:"4",t:"OB / Kart"},{id:"ACH",n:"5",t:"ACH"},{id:"CARVER",n:"6",t:"CARVER"},{id:"KI",n:"7",t:"KI-kontroll"},
+          ];
+          return (
+          <div>
+            {/* Hero status banner */}
+            <div style={{background:C.panelSolid,border:`1px solid ${C.border}`,borderLeft:`4px solid ${phaseColor}`,borderRadius:6,padding:"20px 24px",marginBottom:24,display:"flex",justifyContent:"space-between",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+              <div>
+                <Eyebrow color={phaseColor}>{phaseText}</Eyebrow>
+                <div style={{fontFamily:SERIF,fontSize:24,color:C.cream,margin:"6px 0 4px"}}>{sak.title}</div>
+                <div style={{fontSize:12.5,color:C.textDim,maxWidth:560,lineHeight:1.5}}>PIR-1: {sak.pir1}</div>
+              </div>
+              <div style={{display:"flex",gap:24,textAlign:"center"}}>
+                {[
+                  {n:objects.length,l:"OB-objekter",c:C.goldPale},
+                  {n:kritiske.length,l:"Kritiske ind.",c:kritiske.length?C.red:C.green},
+                  {n:icp.length,l:"ICP-oppdrag",c:C.gold},
+                  {n:`${kiDoneCount}/7`,l:"KI-kontroll",c:kiOk?C.green:C.red},
+                ].map((s,i)=>(
+                  <div key={i}><div style={{fontFamily:SERIF,fontSize:30,color:s.c,lineHeight:1}}>{s.n}</div><div style={{fontSize:10,color:C.grey,letterSpacing:"0.06em",marginTop:4,textTransform:"uppercase"}}>{s.l}</div></div>
+                ))}
+              </div>
+            </div>
+
+            {/* Tool cards grid */}
+            <Eyebrow>Verktøy · velg for å åpne</Eyebrow>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(255px,1fr))",gap:13,margin:"14px 0 28px"}}>
+              {cards.map(c=>(
+                <button key={c.id} onClick={()=>setTab(c.id)}
+                  style={{textAlign:"left",cursor:"pointer",fontFamily:SANS,background:C.card,border:`1px solid ${c.alert?C.red+"66":C.border}`,borderRadius:6,padding:"16px 17px",transition:"all 0.13s",position:"relative"}}
+                  onMouseEnter={e=>{e.currentTarget.style.borderColor=C.gold;e.currentTarget.style.transform="translateY(-2px)";}}
+                  onMouseLeave={e=>{e.currentTarget.style.borderColor=c.alert?C.red+"66":C.border;e.currentTarget.style.transform="none";}}>
+                  {c.alert&&<span style={{position:"absolute",top:13,right:13,width:8,height:8,borderRadius:8,background:C.red,boxShadow:`0 0 0 3px ${C.red}33`}}/>}
+                  <div style={{display:"flex",alignItems:"center",gap:11,marginBottom:10}}>
+                    <span style={{fontSize:22,color:C.gold,width:26,textAlign:"center"}}>{c.icon}</span>
+                    <div><div style={{fontFamily:SERIF,fontSize:16,color:C.cream,lineHeight:1.1}}>{c.label}</div><div style={{fontSize:10.5,color:C.grey,marginTop:2}}>{c.sub}</div></div>
+                  </div>
+                  <div style={{fontSize:11.5,color:c.statC,fontWeight:600,borderTop:`1px solid ${C.dimBorder}`,paddingTop:9,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.stat}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Analytical cycle / workflow strip */}
+            <Eyebrow>Analytisk arbeidsflyt</Eyebrow>
+            <div style={{display:"flex",alignItems:"center",gap:0,margin:"14px 0 26px",flexWrap:"wrap"}}>
+              {flow.map((f,i)=>(
+                <div key={f.id} style={{display:"flex",alignItems:"center"}}>
+                  <button onClick={()=>setTab(f.id)} style={{cursor:"pointer",fontFamily:SANS,background:tab===f.id?C.gold:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"9px 14px",display:"flex",alignItems:"center",gap:8,transition:"all 0.12s"}}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor=C.gold} onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+                    <span style={{fontFamily:SERIF,fontSize:16,color:C.gold,opacity:0.75}}>{f.n}</span>
+                    <span style={{fontSize:12,color:C.text,fontWeight:600}}>{f.t}</span>
+                  </button>
+                  {i<flow.length-1&&<span style={{color:C.gold,opacity:0.5,margin:"0 6px",fontSize:14}}>→</span>}
+                </div>
+              ))}
+            </div>
+
+            {/* Two-column: live conclusion + quick actions */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:16,alignItems:"start"}}>
+              <Card>
+                <Eyebrow>Gjeldende vurdering</Eyebrow>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:12}}>
+                  <div style={{background:C.greenDim,border:`1px solid ${C.green}55`,borderRadius:4,padding:"12px 14px"}}><Eyebrow color={C.green}>MSHEM</Eyebrow><div style={{fontFamily:SERIF,fontSize:15,color:C.cream,margin:"5px 0"}}>{bestH?.title||"–"}</div><div style={{fontSize:11,color:C.textDim}}>ACH +{bestH?hypoScores[bestH.id]:0}</div></div>
+                  <div style={{background:C.redDim,border:`1px solid ${C.red}55`,borderRadius:4,padding:"12px 14px"}}><Eyebrow color={C.red}>FHEM</Eyebrow><div style={{fontFamily:SERIF,fontSize:15,color:C.cream,margin:"5px 0"}}>{fhem?.title||"–"}</div><div style={{fontSize:11,color:C.textDim}}>Uavhengig av score</div></div>
+                </div>
+                {kritiske.length>0&&<div style={{marginTop:13}}><div style={{fontSize:11,fontWeight:700,color:C.red,marginBottom:6}}>KRITISKE INDIKATORER</div>{kritiske.map(i=><div key={i.id} style={{fontSize:12,color:C.text,paddingLeft:12,marginTop:3}}>· {i.tekst} <span style={{color:C.grey}}>({i.sensor})</span></div>)}</div>}
+              </Card>
+              <Card>
+                <Eyebrow>Hurtigvalg</Eyebrow>
+                <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:12}}>
+                  <Btn onClick={generateICP} variant="primary" style={{width:"100%",textAlign:"center"}}>Generer innhentingsplan</Btn>
+                  <Btn onClick={()=>setShowIntsum(true)} style={{width:"100%",textAlign:"center"}}>Generer INTSUM</Btn>
+                  <Btn onClick={exportSak} style={{width:"100%",textAlign:"center"}}>Eksporter sak</Btn>
+                  <Btn onClick={()=>fileInputRef.current?.click()} style={{width:"100%",textAlign:"center"}}>Importer sak</Btn>
+                </div>
+              </Card>
+            </div>
+          </div>
+          );
+        })()}
+
+        {tab==="IPOE"&&(
+          <Sec eyebrow="Trinn 1–4 · Intelligence Preparation of the Operational Environment (IPOE)" title="Etterretningsmessig forberedelse av operasjonsmiljøet" sub="Det doktrinære fundamentet — alle fire trinn mater de øvrige verktøyene">
+            <div style={{display:"grid",gap:14}}>
+              {[{k:"s1",n:"1",t:"Definer operasjonsmiljøet",p:"AO/AI-avgrensning, GAP-liste, tidsvindu"},{k:"s2",n:"2",t:"Beskriv miljøeffekter",p:"OAKOC, terreng, vær, LOC-overlay"},{k:"s3",n:"3",t:"Evaluer trusselen",p:"Trusselmal, HVT-liste, OB, mønster"}].map(s=>(
+                <Card key={s.k} accent={C.gold}>
+                  <div style={{display:"flex",gap:14,alignItems:"flex-start"}}>
+                    <div style={{fontFamily:SERIF,fontSize:34,color:C.gold,lineHeight:1,opacity:0.7,minWidth:34}}>{s.n}</div>
+                    <div style={{flex:1}}>
+                      <div style={{fontFamily:SERIF,fontSize:17,color:C.cream,marginBottom:2}}>{s.t}</div>
+                      <div style={{fontSize:11,color:C.grey,marginBottom:10,fontStyle:"italic"}}>{s.p}</div>
+                      <TArea value={ipb[s.k]} onChange={v=>setIpb(p=>({...p,[s.k]:v}))} style={{minHeight:72}}/>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+              <Card accent={C.gold}>
+                <div style={{display:"flex",gap:14,alignItems:"flex-start"}}>
+                  <div style={{fontFamily:SERIF,fontSize:34,color:C.gold,lineHeight:1,opacity:0.7,minWidth:34}}>4</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:SERIF,fontSize:17,color:C.cream,marginBottom:2}}>Bestem motstanderens handlemåter</div>
+                    <div style={{fontSize:11,color:C.grey,marginBottom:12,fontStyle:"italic"}}>MSHEM / FHEM — genereres automatisk fra ACH-matrisen</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                      <div style={{background:C.greenDim,border:`1px solid ${C.green}55`,borderRadius:4,padding:"12px 14px"}}><Eyebrow color={C.green}>MSHEM</Eyebrow><div style={{fontFamily:SERIF,fontSize:15,color:C.cream,margin:"5px 0"}}>{bestH?.title||"–"}</div><div style={{fontSize:11,color:C.textDim}}>ACH-score +{bestH?hypoScores[bestH.id]:0}</div></div>
+                      <div style={{background:C.redDim,border:`1px solid ${C.red}55`,borderRadius:4,padding:"12px 14px"}}><Eyebrow color={C.red}>FHEM</Eyebrow><div style={{fontFamily:SERIF,fontSize:15,color:C.cream,margin:"5px 0"}}>{fhem?.title||"–"}</div><div style={{fontSize:11,color:C.textDim}}>Vurderes uavhengig av score</div></div>
+                    </div>
+                    <Btn onClick={()=>setTab("ACH")} style={{marginTop:12,fontSize:11}}>Åpne ACH-matrise →</Btn>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </Sec>
+        )}
+
+        {tab==="OBI"&&(
+          <Sec eyebrow="Objektbasert etterretning · OBI" title="Order of Battle" sub="Hvert objekt er én levende post som anrikes — ikke en ny rapport per observasjon">
+            <div style={{display:"grid",gap:11,marginBottom:22}}>
+              {objects.map(o=>(
+                <Card key={o.id}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontFamily:SERIF,fontSize:16,color:C.cream}}>{o.name}</span><span style={{fontSize:10,padding:"2px 8px",borderRadius:2,background:C.bgDeep,color:C.textDim,border:`1px solid ${C.border}`}}>{o.type}</span></div>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:11,color:KILDE_COL[o.kilde],fontWeight:700,fontFamily:SANS}}>{o.kilde}{o.info} · {o.disiplin}</span><Btn onClick={()=>setObjects(p=>p.filter(x=>x.id!==o.id))} variant="danger" style={{padding:"3px 8px"}}>✕</Btn></div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:8}}>
+                    {[["LOC",o.loc],["Styrke",o.styrke],["Utstyr",o.utstyr],["Aktivitet",o.aktivitet],["Tid (Z)",o.tid]].map(([k,v])=>v&&(<div key={k} style={{background:C.bgDeep,borderRadius:3,padding:"6px 10px"}}><div style={{fontSize:9,color:C.grey,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:3,fontFamily:SANS}}>{k}</div><div style={{fontSize:12,color:C.text}}>{v}</div></div>))}
+                  </div>
+                  {o.notes&&<div style={{marginTop:8,fontSize:12,color:C.amber,padding:"6px 11px",background:C.amberDim,borderRadius:3,borderLeft:`3px solid ${C.amber}`}}>{o.notes}</div>}
+                  <div style={{marginTop:11,display:"flex",gap:8,alignItems:"center"}}>{bevis.find(b=>b.kilde===o.id)?<span style={{fontSize:11,color:C.green}}>✓ I ACH</span>:<Btn onClick={()=>sendObjToAch(o)} style={{fontSize:11,padding:"4px 11px"}}>→ Send til ACH</Btn>}<Btn onClick={()=>sendObjToCarver(o)} style={{fontSize:11,padding:"4px 11px"}}>→ Send til CARVER</Btn></div>
+                </Card>
+              ))}
+            </div>
+            <Card style={{borderStyle:"dashed"}}>
+              <Eyebrow>+ Nytt objekt</Eyebrow>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(155px,1fr))",gap:8,margin:"12px 0 10px"}}>
+                <Input value={newObj.name} onChange={v=>setNewObj(p=>({...p,name:v}))} placeholder="Enhetsnavn *" style={{width:"100%",boxSizing:"border-box"}}/>
+                <Input value={newObj.type} onChange={v=>setNewObj(p=>({...p,type:v}))} placeholder="Type" style={{width:"100%",boxSizing:"border-box"}}/>
+                <Input value={newObj.loc} onChange={v=>setNewObj(p=>({...p,loc:v}))} placeholder="Lokasjon (MGRS)" style={{width:"100%",boxSizing:"border-box"}}/>
+                <Input value={newObj.styrke} onChange={v=>setNewObj(p=>({...p,styrke:v}))} placeholder="Styrke" style={{width:"100%",boxSizing:"border-box"}}/>
+                <Input value={newObj.utstyr} onChange={v=>setNewObj(p=>({...p,utstyr:v}))} placeholder="Utstyr" style={{width:"100%",boxSizing:"border-box"}}/>
+                <Input value={newObj.aktivitet} onChange={v=>setNewObj(p=>({...p,aktivitet:v}))} placeholder="Aktivitet" style={{width:"100%",boxSizing:"border-box"}}/>
+                <Select value={newObj.kilde} onChange={v=>setNewObj(p=>({...p,kilde:v}))} options={["A","B","C","D","E","F"].map(k=>({value:k,label:`Kilde ${k}`}))} style={{width:"100%",boxSizing:"border-box"}}/>
+                <Select value={newObj.info} onChange={v=>setNewObj(p=>({...p,info:v}))} options={["1","2","3","4","5","6"].map(k=>({value:k,label:`Info ${k}`}))} style={{width:"100%",boxSizing:"border-box"}}/>
+                <Input value={newObj.disiplin} onChange={v=>setNewObj(p=>({...p,disiplin:v}))} placeholder="Disiplin" style={{width:"100%",boxSizing:"border-box"}}/>
+              </div>
+              <Input value={newObj.notes} onChange={v=>setNewObj(p=>({...p,notes:v}))} placeholder="Merknader" style={{width:"100%",boxSizing:"border-box",marginBottom:10}}/>
+              <Btn onClick={addObject} variant="primary">Registrer objekt</Btn>
+            </Card>
+          </Sec>
+        )}
+
+        {tab==="KART"&&(
+          <Sec eyebrow="Situasjonskart · Common Operational Picture" title="Situasjonskart Øst-Finnmark / Kola" sub="Order of Battle, NAI-er og grense plottet geografisk — klikk «Plasser» på et objekt og deretter på kartet">
+            <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:16,alignItems:"start"}}>
+              {/* MAP */}
+              <div style={{background:"#2A3326",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden",position:"relative"}}>
+                {placing&&<div style={{position:"absolute",top:10,left:10,zIndex:20,background:C.gold,color:C.ink,fontSize:11,fontWeight:700,padding:"5px 11px",borderRadius:3,fontFamily:SANS}}>Klikk i kartet for å plassere: {objects.find(o=>o.id===placing)?.name}</div>}
+                <svg viewBox="0 0 100 70" style={{width:"100%",display:"block",cursor:placing?"crosshair":"default"}}
+                  onClick={e=>{
+                    if(!placing)return;
+                    const r=e.currentTarget.getBoundingClientRect();
+                    const x=Math.round(((e.clientX-r.left)/r.width)*100);
+                    const y=Math.round(((e.clientY-r.top)/r.height)*70/0.7);
+                    setObjects(p=>p.map(o=>o.id===placing?{...o,x:Math.max(2,Math.min(98,x)),y:Math.max(2,Math.min(98,y))}:o));
+                    setPlacing(null);
+                  }}>
+                  {/* sea */}
+                  <rect x="0" y="0" width="100" height="70" fill="#24302A"/>
+                  {/* grid */}
+                  {[...Array(11)].map((_,i)=><line key={"v"+i} x1={i*10} y1="0" x2={i*10} y2="70" stroke="#3A463699" strokeWidth="0.15"/>)}
+                  {[...Array(8)].map((_,i)=><line key={"h"+i} x1="0" y1={i*10} x2="100" y2={i*10} stroke="#3A463699" strokeWidth="0.15"/>)}
+                  {/* landmass — stylised Finnmark + Kola */}
+                  <path d="M0,46 L14,42 L26,44 L34,40 L40,44 L50,41 L58,46 L62,40 L70,42 L78,36 L86,40 L94,34 L100,40 L100,70 L0,70 Z" fill="#33402F" stroke="#46553F" strokeWidth="0.3"/>
+                  {/* Kola peninsula hint */}
+                  <path d="M78,36 L86,30 L94,28 L100,32 L100,40 L94,34 L86,40 L78,36 Z" fill="#3A472F" stroke="#46553F" strokeWidth="0.25"/>
+                  {/* national border (NO/RU) dashed */}
+                  <path d="M62,40 L64,30 L66,18 L68,8" fill="none" stroke={C.gold} strokeWidth="0.4" strokeDasharray="1.2 1" opacity="0.8"/>
+                  <text x="64.5" y="13" fill={C.gold} fontSize="2" fontFamily="sans-serif" opacity="0.85">NO | RU</text>
+                  {/* place labels */}
+                  <text x="6" y="52" fill={C.textDim} fontSize="2.1" fontFamily="serif" opacity="0.7">Troms</text>
+                  <text x="40" y="55" fill={C.textDim} fontSize="2.1" fontFamily="serif" opacity="0.7">Finnmark</text>
+                  <text x="55" y="49" fill={C.textDim} fontSize="2" fontFamily="serif" opacity="0.7">Sør-Varanger</text>
+                  <text x="86" y="44" fill={C.textDim} fontSize="2" fontFamily="serif" opacity="0.7">Pechenga</text>
+                  <text x="90" y="26" fill={C.textDim} fontSize="2" fontFamily="serif" opacity="0.7">Murmansk</text>
+                  <text x="30" y="10" fill={C.textDim} fontSize="2.1" fontFamily="serif" opacity="0.55">Barentshavet</text>
+                  {/* NAI zones */}
+                  {naiList.map(n=>(
+                    <g key={n.id}>
+                      <circle cx={n.x} cy={n.y*0.7} r="3.4" fill="none" stroke={C.amber} strokeWidth="0.3" strokeDasharray="0.8 0.6" opacity="0.75"/>
+                      <text x={n.x} y={n.y*0.7-4} fill={C.amber} fontSize="1.8" fontFamily="sans-serif" textAnchor="middle" opacity="0.9">{n.navn}</text>
+                    </g>
+                  ))}
+                  {/* enemy unit markers (hostile = red diamond frame) */}
+                  {objects.map(o=>{
+                    const cx=o.x??50, cy=(o.y??50)*0.7;
+                    return (
+                      <g key={o.id} style={{cursor:"pointer"}} onClick={ev=>{ev.stopPropagation();setPlacing(placing===o.id?null:o.id);}}>
+                        <rect x={cx-3} y={cy-2.2} width="6" height="4.4" fill={C.redDim} stroke={C.red} strokeWidth="0.4" rx="0.4"/>
+                        <line x1={cx-3} y1={cy-2.2} x2={cx+3} y2={cy+2.2} stroke={C.red} strokeWidth="0.25" opacity="0.6"/>
+                        <line x1={cx+3} y1={cy-2.2} x2={cx-3} y2={cy+2.2} stroke={C.red} strokeWidth="0.25" opacity="0.6"/>
+                        <text x={cx} y={cy+0.9} fill={C.cream} fontSize="2.2" fontFamily="sans-serif" textAnchor="middle" fontWeight="700">{typeSym(o.type)}</text>
+                        <text x={cx} y={cy+5} fill={C.text} fontSize="1.7" fontFamily="sans-serif" textAnchor="middle">{o.name.length>16?o.name.slice(0,15)+"…":o.name}</text>
+                      </g>
+                    );
+                  })}
+                </svg>
+                <div style={{display:"flex",gap:14,flexWrap:"wrap",padding:"10px 14px",borderTop:`1px solid ${C.border}`,fontSize:11,color:C.textDim}}>
+                  <span><span style={{color:C.red}}>▭</span> Fiendtlig enhet</span>
+                  <span><span style={{color:C.amber}}>◌</span> NAI</span>
+                  <span><span style={{color:C.gold}}>┊</span> Riksgrense</span>
+                  <span style={{marginLeft:"auto"}}>▭ Manøver · ● Ild · ◆ C2 · ▲ SF</span>
+                </div>
+              </div>
+
+              {/* SIDEBAR */}
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                <Card>
+                  <Eyebrow>Plotted enheter</Eyebrow>
+                  <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:7}}>
+                    {objects.map(o=>(
+                      <div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"7px 9px",background:C.bgDeep,borderRadius:3,border:`1px solid ${placing===o.id?C.gold:C.dimBorder}`}}>
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:12,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}><span style={{color:C.red}}>{typeSym(o.type)}</span> {o.name}</div>
+                          <div style={{fontSize:10,color:C.grey}}>{o.x},{o.y} · {o.kilde}{o.info}</div>
+                        </div>
+                        <Btn onClick={()=>setPlacing(placing===o.id?null:o.id)} style={{fontSize:10,padding:"3px 9px",flexShrink:0,...(placing===o.id?{background:C.gold,color:C.ink,border:"none"}:{})}}>{placing===o.id?"Klikk kart":"Plasser"}</Btn>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+                <Card>
+                  <Eyebrow>NAI-er</Eyebrow>
+                  <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:6}}>
+                    {naiList.map(n=>(
+                      <div key={n.id} style={{fontSize:12,color:C.text}}><span style={{color:C.amber,fontWeight:700}}>{n.navn}</span> <span style={{color:C.grey}}>— {n.beskr}</span></div>
+                    ))}
+                  </div>
+                </Card>
+                <div style={{fontSize:11,color:C.grey,lineHeight:1.6,padding:"0 4px"}}>Kartet er et taktisk skjematisk lerret — ikke en geodetisk projeksjon. Posisjoner plottes manuelt for situasjonsforståelse og deles via eksport/import.</div>
+              </div>
+            </div>
+          </Sec>
+        )}
+
+        {tab==="IW"&&(
+          <Sec eyebrow="Indikasjon og varsling · Fase 0–1" title="Varslingsmatrise" sub="Kontinuerlig analyse av svake, tvetydige signaler — udekkede indikatorer mater innhentingsplanen">
+            <div style={{display:"flex",gap:11,marginBottom:20,flexWrap:"wrap"}}>
+              {["NORMAL","FORHØYET","KRITISK"].map(s=>{const cnt=iwItems.filter(i=>i.status===s).length;return(<div key={s} style={{background:C.card,border:`1px solid ${STATUS_C[s]}55`,borderRadius:4,padding:"12px 20px",textAlign:"center",minWidth:108}}><div style={{fontFamily:SERIF,fontSize:26,color:STATUS_C[s]}}>{cnt}</div><Eyebrow color={STATUS_C[s]}>{s}</Eyebrow></div>);})}
+              <div style={{flex:1,minWidth:200,background:C.card,border:`1px solid ${C.border}`,borderRadius:4,padding:"12px 16px",display:"flex",flexDirection:"column",justifyContent:"center"}}><Eyebrow>Fasetolkning</Eyebrow><div style={{fontSize:13,color:kritiske.length>=2?C.red:kritiske.length===1?C.amber:C.green,fontWeight:600,fontFamily:SANS,marginTop:4}}>{kritiske.length>=2?"FASE 0→1: Trigger nådd – vurder varsling":"Fase 0: Løpende overvåking"}</div></div>
+            </div>
+            <div style={{display:"grid",gap:8,marginBottom:20}}>
+              {iwItems.map(iw=>(
+                <div key={iw.id} style={{background:C.card,border:`1px solid ${STATUS_C[iw.status]}33`,borderLeft:`3px solid ${STATUS_C[iw.status]}`,borderRadius:4,padding:"11px 15px",display:"grid",gridTemplateColumns:"1fr auto",gap:14,alignItems:"center"}}>
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5,flexWrap:"wrap"}}><Pill label={iw.status}/><span style={{fontSize:11,color:C.goldPale}}>{iw.pir}</span><span style={{fontSize:11,color:C.grey}}>· {iw.sensor} · {iw.nai}</span>{!iw.dekket&&<span style={{fontSize:9,color:C.amber,border:`1px solid ${C.amber}55`,padding:"1px 6px",borderRadius:2,letterSpacing:"0.06em"}}>UDEKKET</span>}</div>
+                    <div style={{fontSize:13,color:C.text,marginBottom:3}}>{iw.tekst}</div>
+                    <div style={{fontSize:11,color:C.grey}}>Obs: {iw.obs} · Avvik: <span style={{color:C.amber}}>{iw.avvik}</span></div>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:5,alignItems:"flex-end"}}>
+                    <Select value={iw.status} onChange={v=>setIw(p=>p.map(i=>i.id===iw.id?{...i,status:v}:i))} options={["NORMAL","FORHØYET","KRITISK"]} style={{fontSize:11}}/>
+                    <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                      <button onClick={()=>setIw(p=>p.map(i=>i.id===iw.id?{...i,dekket:!i.dekket}:i))} style={{fontFamily:SANS,cursor:"pointer",fontSize:10,padding:"3px 8px",borderRadius:2,border:`1px solid ${iw.dekket?C.green:C.amber}55`,background:"transparent",color:iw.dekket?C.green:C.amber}}>{iw.dekket?"Dekket":"Udekket"}</button>
+                      {bevis.find(b=>b.kilde===iw.id)?<span style={{fontSize:10,color:C.green}}>✓ ACH</span>:<Btn onClick={()=>sendIwToAch(iw)} style={{fontSize:10,padding:"3px 8px"}}>→ ACH</Btn>}
+                      <Btn onClick={()=>setIw(p=>p.filter(i=>i.id!==iw.id))} variant="danger" style={{padding:"3px 7px",fontSize:10}}>✕</Btn>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <Card style={{borderStyle:"dashed",marginBottom:16}}>
+              <Eyebrow>+ Ny indikator</Eyebrow>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 110px 110px 95px",gap:8,margin:"12px 0 10px"}}>
+                <Input value={newIw.tekst} onChange={v=>setNewIw(p=>({...p,tekst:v}))} placeholder="Indikator *" style={{width:"100%",boxSizing:"border-box"}}/>
+                <Input value={newIw.sensor} onChange={v=>setNewIw(p=>({...p,sensor:v}))} placeholder="Sensor" style={{width:"100%",boxSizing:"border-box"}}/>
+                <Input value={newIw.nai} onChange={v=>setNewIw(p=>({...p,nai:v}))} placeholder="NAI" style={{width:"100%",boxSizing:"border-box"}}/>
+                <Select value={newIw.status} onChange={v=>setNewIw(p=>({...p,status:v}))} options={["NORMAL","FORHØYET","KRITISK"]} style={{width:"100%",boxSizing:"border-box"}}/>
+                <Select value={newIw.pir} onChange={v=>setNewIw(p=>({...p,pir:v}))} options={["PIR-1","PIR-2"]} style={{width:"100%",boxSizing:"border-box"}}/>
+              </div>
+              <Btn onClick={addIw} variant="primary">Legg til</Btn>
+            </Card>
+            <div style={{background:C.amberDim,border:`1px solid ${C.amber}44`,borderRadius:4,padding:"13px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+              <div style={{fontSize:12.5,color:C.text}}><strong style={{color:C.amber}}>{udekket.length} udekkede + {kritiske.length} kritiske indikatorer</strong> kan automatisk omsettes til en innhentingsplan.</div>
+              <Btn onClick={generateICP} variant="primary">Generer innhentingsplan →</Btn>
+            </div>
+          </Sec>
+        )}
+
+        {tab==="ACH"&&(
+          <Sec eyebrow="Analysis of Competing Hypotheses · Heuer & Pherson" title="Konkurrerende hypoteser" sub="Bevis evalueres mot alle hypoteser simultant — score og handlemåter beregnes live">
+            <div style={{display:"flex",gap:11,marginBottom:20,flexWrap:"wrap"}}>
+              {hypos.map(h=>{const s=hypoScores[h.id];const isB=bestH?.id===h.id,isW=worstH?.id===h.id;return(<div key={h.id} style={{flex:1,minWidth:150,background:C.card,border:`1px solid ${isB?h.color:C.border}`,borderTop:`3px solid ${h.color}`,borderRadius:4,padding:"14px 18px"}}><Eyebrow color={h.color}>{h.label}</Eyebrow><div style={{fontFamily:SERIF,fontSize:15,color:C.cream,margin:"5px 0 8px"}}>{h.title}</div><div style={{fontFamily:SERIF,fontSize:30,color:s>0?C.green:s<0?C.red:C.grey}}>{s>0?"+":""}{s}</div><div style={{fontSize:10,marginTop:2,fontFamily:SANS}}>{isB?<span style={{color:C.green}}>↑ STERKEST</span>:isW?<span style={{color:C.red}}>↓ SVAKEST</span>:<span style={{color:C.grey}}>Mellomliggende</span>}</div></div>);})}
+            </div>
+            <div style={{overflowX:"auto",marginBottom:20}}>
+              <table style={{width:"100%",borderCollapse:"collapse",minWidth:640}}>
+                <thead><tr><th style={th}>Bevis / observasjon</th>{hypos.map(h=><th key={h.id} style={{...th,textAlign:"center",minWidth:130,color:h.color}}>{h.label}</th>)}<th style={{...th,textAlign:"center",minWidth:90}}>Diagnoseverdi</th><th style={{...th,width:30}}></th></tr></thead>
+                <tbody>
+                  {bevis.map((b,ri)=>(
+                    <tr key={b.id} style={{background:ri%2?C.panelSolid:"transparent"}}>
+                      <td style={td}>{b.tekst}{b.kilde&&<span style={{fontSize:10,color:C.grey,display:"block",marginTop:2}}>{iwItems.find(i=>i.id===b.kilde)?"↑ fra I&W":objects.find(o=>o.id===b.kilde)?"↑ fra OBI":""}</span>}</td>
+                      {hypos.map(h=>(<td key={h.id} style={{...td,textAlign:"center"}}><div style={{display:"flex",gap:3,justifyContent:"center",flexWrap:"wrap"}}>{SCORE_BTNS.map(v=><ScoreBtn key={v} val={v} current={b.scores[h.id]||"N"} onChange={val=>updateScore(b.id,h.id,val)}/>)}</div></td>))}
+                      <td style={{...td,textAlign:"center"}}><Select value={b.diag} onChange={v=>setBevis(p=>p.map(x=>x.id===b.id?{...x,diag:v}:x))} options={["Høy","Middels","Lav"]} style={{fontSize:11}}/></td>
+                      <td style={{...td,textAlign:"center"}}><Btn onClick={()=>setBevis(p=>p.filter(x=>x.id!==b.id))} variant="danger" style={{padding:"2px 7px",fontSize:11}}>✕</Btn></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Card style={{borderStyle:"dashed",marginBottom:20}}>
+              <Eyebrow>+ Nytt bevis</Eyebrow>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 130px auto",gap:8,marginTop:12,alignItems:"center"}}>
+                <Input value={newBevis.tekst} onChange={v=>setNewBevis(p=>({...p,tekst:v}))} placeholder="Bevis / observasjon *" style={{width:"100%",boxSizing:"border-box"}}/>
+                <Select value={newBevis.diag} onChange={v=>setNewBevis(p=>({...p,diag:v}))} options={["Høy","Middels","Lav"]} style={{width:"100%",boxSizing:"border-box"}}/>
+                <Btn onClick={()=>{if(!newBevis.tekst)return;setBevis(p=>[...p,{id:uid(),tekst:newBevis.tekst,diag:newBevis.diag,scores:Object.fromEntries(hypos.map(h=>[h.id,"N"])),kilde:""}]);setNewBevis({tekst:"",diag:"Middels"});}} variant="primary">Legg til</Btn>
+              </div>
+            </Card>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+              <div style={{background:C.greenDim,border:`1px solid ${C.green}55`,borderRadius:5,padding:"16px 18px"}}><Eyebrow color={C.green}>MSHEM · Mest sannsynlig handlemåte</Eyebrow><div style={{fontFamily:SERIF,fontSize:18,color:C.cream,margin:"7px 0"}}>{bestH?.title}</div><div style={{fontSize:12,color:C.textDim}}>ACH-score <span style={{color:C.green,fontWeight:700}}>+{bestH?hypoScores[bestH.id]:0}</span> — sterkest understøttet.</div></div>
+              <div style={{background:C.redDim,border:`1px solid ${C.red}55`,borderRadius:5,padding:"16px 18px"}}><Eyebrow color={C.red}>FHEM · Farligste handlemåte</Eyebrow><div style={{fontFamily:SERIF,fontSize:18,color:C.cream,margin:"7px 0"}}>{fhem?.title}</div><div style={{fontSize:12,color:C.textDim}}>Vurderes uavhengig av ACH-score. Krever egne indikatorer.</div></div>
+            </div>
+          </Sec>
+        )}
+
+        {tab==="CARVER"&&(
+          <Sec eyebrow="Målprioritering" title="CARVER-matrise" sub="Criticality · Accessibility · Recuperability · Vulnerability · Effect · Recognizability — sortert automatisk">
+            <div style={{overflowX:"auto",marginBottom:14}}>
+              <table style={{width:"100%",borderCollapse:"collapse",minWidth:660}}>
+                <thead><tr><th style={th}>Mål</th>{["C","A","R","V","E","Rec"].map(k=><th key={k} style={{...th,textAlign:"center",minWidth:50}}>{k}</th>)}<th style={{...th,textAlign:"center",minWidth:64,color:C.gold}}>Sum</th><th style={{...th,width:30}}></th></tr></thead>
+                <tbody>
+                  {carverSorted.map((row,ri)=>{const max=carverSorted[0]?.sum||1;return(
+                    <tr key={row.id} style={{background:ri===0?C.greenDim:ri%2?C.panelSolid:"transparent"}}>
+                      <td style={td}><input value={row.name} onChange={e=>setCarver(p=>p.map(r=>r.id===row.id?{...r,name:e.target.value}:r))} style={{background:"transparent",border:"none",color:ri===0?C.green:C.text,fontFamily:SANS,fontSize:13,fontWeight:ri===0?700:400,outline:"none",width:"100%"}}/>{ri===0&&<Eyebrow color={C.green}>▲ Høyest prioritet</Eyebrow>}</td>
+                      {["C","A","R","V","E","Rec"].map(k=>(<td key={k} style={{...td,textAlign:"center"}}><input type="number" min="0" max="10" value={row[k]} onChange={e=>updateCarver(row.id,k,e.target.value)} style={{width:38,textAlign:"center",background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:3,color:C.text,fontFamily:SANS,fontSize:12,padding:"4px 0",outline:"none"}}/></td>))}
+                      <td style={{...td,textAlign:"center"}}><div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}><span style={{fontFamily:SERIF,fontSize:17,color:ri===0?C.green:C.cream}}>{row.sum}</span><div style={{height:3,width:46,borderRadius:2,background:C.dimBorder}}><div style={{height:3,width:`${row.sum/max*100}%`,borderRadius:2,background:ri===0?C.green:C.gold}}/></div></div></td>
+                      <td style={{...td,textAlign:"center"}}><Btn onClick={()=>setCarver(p=>p.filter(r=>r.id!==row.id))} variant="danger" style={{padding:"2px 7px",fontSize:11}}>✕</Btn></td>
+                    </tr>);})}
+                </tbody>
+              </table>
+            </div>
+            <div style={{display:"flex",gap:10,marginBottom:14,alignItems:"center"}}><Btn onClick={()=>setCarver(p=>[...p,{id:uid(),objId:"",name:"Nytt mål",C:5,A:5,R:5,V:5,E:5,Rec:5}])}>+ Nytt mål</Btn><span style={{fontSize:11,color:C.grey}}>OB-objekter sendes hit fra fanen «OB-Objekter»</span></div>
+            <div style={{background:C.panelSolid,border:`1px solid ${C.border}`,borderRadius:4,padding:"12px 16px",fontSize:12,color:C.textDim}}><strong style={{color:C.gold}}>C</strong> Criticality · <strong style={{color:C.gold}}>A</strong> Accessibility · <strong style={{color:C.gold}}>R</strong> Recuperability · <strong style={{color:C.gold}}>V</strong> Vulnerability · <strong style={{color:C.gold}}>E</strong> Effect · <strong style={{color:C.gold}}>Rec</strong> Recognizability — skala 1–10</div>
+          </Sec>
+        )}
+
+        {tab==="ICP"&&(
+          <Sec eyebrow="Intelligence Collection Plan · ICP" title="Innhentingsplan" sub="Genereres fra PIR-er og udekkede/kritiske indikatorer — bryter ned PIR → SIR → EEI/IR og kobler dem til sensorer etter 3R-prinsippet">
+            {icp.length===0?(
+              <Card style={{textAlign:"center",padding:"40px 20px"}}><div style={{fontFamily:SERIF,fontSize:18,color:C.cream,marginBottom:8}}>Ingen innhentingsplan generert ennå</div><div style={{fontSize:13,color:C.textDim,marginBottom:18}}>Planen bygges automatisk fra varslingsmatrisen — udekkede og kritiske indikatorer brytes ned i SIR, konkrete EEI/IR-informasjonskrav, NAI, sensorvalg og LTIOV.</div><Btn onClick={generateICP} variant="primary">Generer innhentingsplan nå</Btn></Card>
+            ):(
+              <>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><div style={{fontSize:12,color:C.textDim}}>{icp.length} innhentingsoppdrag · prioritert etter status</div><Btn onClick={generateICP}>↻ Regenerer fra I&W</Btn></div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",minWidth:1040}}>
+                    <thead><tr><th style={{...th,minWidth:60}}>PIR</th><th style={{...th,minWidth:220}}>SIR</th><th style={{...th,minWidth:240}}>EEI / IR (informasjonskrav)</th><th style={{...th,minWidth:70}}>NAI</th><th style={{...th,minWidth:170}}>Sensor (3R)</th><th style={{...th,minWidth:110}}>LTIOV</th><th style={{...th,minWidth:100}}>Prioritet</th></tr></thead>
+                    <tbody>
+                      {icp.map((r,ri)=>{const pc=r.prioritet.startsWith("1")?C.red:r.prioritet.startsWith("2")?C.amber:C.green;return(
+                        <tr key={r.id} style={{background:ri%2?C.panelSolid:"transparent"}}>
+                          <td style={{...td,color:C.goldPale,fontWeight:600}}>{r.pir}</td>
+                          <td style={td}>{r.sir}</td>
+                          <td style={td}>
+                            <ol style={{margin:0,paddingLeft:16}}>
+                              {(r.eei||[]).map((e,ei)=><li key={ei} style={{fontSize:11.5,color:C.textDim,marginBottom:3,lineHeight:1.45}}><span style={{color:C.gold,fontWeight:600}}>EEI {ei+1}.</span> {e}</li>)}
+                            </ol>
+                          </td>
+                          <td style={{...td,color:C.textDim}}>{r.nai}</td>
+                          <td style={{...td,fontSize:11.5}}>{r.sensors}<div style={{fontSize:10,color:C.grey,marginTop:2}}>{r.method}</div></td>
+                          <td style={{...td,fontFamily:SERIF,color:C.cream}}>{r.ltiov}</td>
+                          <td style={td}><span style={{fontSize:11,fontWeight:700,color:pc}}>{r.prioritet}</span></td>
+                        </tr>);})}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{marginTop:16,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+                  {[{t:"Redundans",d:"Hver kritisk NAI dekkes av minst to uavhengige ressurser."},{t:"Miks",d:"Ulike sensortyper mot samme NAI gir kryssvalidering mot villedning."},{t:"Cueing",d:"Én sensor dirigerer neste — SAR → optisk → SIGINT-bekreftelse."}].map(x=>(<div key={x.t} style={{background:C.card,border:`1px solid ${C.border}`,borderTop:`2px solid ${C.gold}`,borderRadius:4,padding:"12px 14px"}}><Eyebrow>{x.t}</Eyebrow><div style={{fontSize:12,color:C.textDim,marginTop:6,lineHeight:1.6}}>{x.d}</div></div>))}
+                </div>
+              </>
+            )}
+          </Sec>
+        )}
+
+        {tab==="REDTEAM"&&(
+          <Sec eyebrow="Red Team · Motperspektiv (Heuer & Pherson)" title="Fiendens etterretnings- og operasjonsdesign" sub="Speilvend prosessen: hva må motstanderen vite om OSS, hvordan samler han det inn, og hvilke beslutninger driver det?">
+
+            {/* Enemy intent banner */}
+            <div style={{background:C.redDim,border:`1px solid ${C.red}55`,borderLeft:`4px solid ${C.red}`,borderRadius:6,padding:"16px 20px",marginBottom:24}}>
+              <Eyebrow color={C.red}>Fiendens antatte intensjon</Eyebrow>
+              <TArea value={eOps.intent} onChange={v=>setEops(p=>({...p,intent:v}))} style={{marginTop:8,minHeight:54,background:"#3a221e"}}/>
+            </div>
+
+            {/* 1 — Enemy PIR / information needs */}
+            <div style={{marginBottom:14}}><Eyebrow color={C.red}>1 · Fiendens informasjonsbehov (EPIR/CCIR) — hva motstanderen må vite om oss</Eyebrow></div>
+            <div style={{display:"grid",gap:10,marginBottom:14}}>
+              {ePir.map((p,i)=>(
+                <Card key={p.id} style={{borderTop:`2px solid ${C.red}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontSize:11,fontWeight:700,color:C.red,fontFamily:SANS}}>EPIR-{i+1}</span></div>
+                      <input value={p.tekst} onChange={e=>setEpir(prev=>prev.map(x=>x.id===p.id?{...x,tekst:e.target.value}:x))} style={{background:"transparent",border:"none",borderBottom:`1px solid ${C.dimBorder}`,color:C.cream,fontSize:14,fontFamily:SERIF,outline:"none",width:"100%",paddingBottom:3,marginBottom:8}}/>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                        <div><div style={{fontSize:10,color:C.grey,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:3}}>Vårt forhold det treffer</div><div style={{fontSize:12,color:C.text}}>{p.mot}</div></div>
+                        <div><div style={{fontSize:10,color:C.grey,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:3}}>Hvorfor fienden trenger det</div><div style={{fontSize:12,color:C.textDim}}>{p.ccir}</div></div>
+                      </div>
+                    </div>
+                    <Btn onClick={()=>setEpir(prev=>prev.filter(x=>x.id!==p.id))} variant="danger" style={{padding:"3px 8px"}}>✕</Btn>
+                  </div>
+                </Card>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8,marginBottom:28}}>
+              <Btn onClick={()=>setEpir(p=>[...p,{id:uid(),tekst:"Nytt informasjonsbehov hos fienden",mot:"—",ccir:"—"}])}>+ Nytt EPIR</Btn>
+              <Btn onClick={generateEnemyICP} variant="primary">Generer fiendens ICP →</Btn>
+            </div>
+
+            {/* 2 — Enemy ICP */}
+            <div style={{marginBottom:14}}><Eyebrow color={C.red}>2 · Fiendens innhentingsplan (Enemy ICP) — hvordan motstanderen samler inn mot oss</Eyebrow></div>
+            {eIcp.length===0?(
+              <Card style={{textAlign:"center",padding:"28px 20px",marginBottom:28}}><div style={{fontSize:13,color:C.textDim,marginBottom:14}}>Fiendens ICP bygges fra EPIR-ene over — hver omsettes til fiendtlige EEI-er og sensorer rettet mot oss.</div><Btn onClick={generateEnemyICP} variant="primary">Generer fiendens ICP</Btn></Card>
+            ):(
+              <div style={{overflowX:"auto",marginBottom:28}}>
+                <table style={{width:"100%",borderCollapse:"collapse",minWidth:920}}>
+                  <thead><tr><th style={{...th,minWidth:200}}>Fiendens EPIR</th><th style={{...th,minWidth:250}}>Fiendens EEI mot oss</th><th style={{...th,minWidth:220}}>Fiendens sensor</th><th style={{...th,minWidth:90}}>NLT</th><th style={{...th,minWidth:110}}>Prioritet</th></tr></thead>
+                  <tbody>
+                    {eIcp.map((r,ri)=>(
+                      <tr key={r.id} style={{background:ri%2?C.panelSolid:"transparent"}}>
+                        <td style={td}>{r.epir}<div style={{fontSize:10.5,color:C.grey,marginTop:3}}>Treffer: {r.mot}</div></td>
+                        <td style={td}><ol style={{margin:0,paddingLeft:16}}>{r.eei.map((e,ei)=><li key={ei} style={{fontSize:11.5,color:C.textDim,marginBottom:3,lineHeight:1.45}}>{e}</li>)}</ol></td>
+                        <td style={{...td,fontSize:11.5}}>{r.sensors}</td>
+                        <td style={{...td,fontFamily:SERIF,color:C.cream}}>{r.ltiov}</td>
+                        <td style={td}><span style={{fontSize:11,fontWeight:700,color:r.prioritet.startsWith("1")?C.red:C.amber}}>{r.prioritet}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div style={{marginTop:12,background:C.amberDim,border:`1px solid ${C.amber}44`,borderRadius:4,padding:"11px 15px",fontSize:12,color:C.text}}>
+                  <strong style={{color:C.amber}}>Vår motrespons:</strong> Hver fiendtlig EEI peker på en signatur vi må forvalte. Bruk dette til kontra-ISTAR og EMCON — nekt fienden de observasjonene beslutningene hans hviler på.
+                </div>
+              </div>
+            )}
+
+            {/* 3 — Enemy decision points */}
+            <div style={{marginBottom:14}}><Eyebrow color={C.red}>3 · Fiendens beslutningspunkter (DP) — hva som utløser hvilken handling</Eyebrow></div>
+            <div style={{display:"grid",gap:10,marginBottom:14}}>
+              {eDp.map(d=>(
+                <Card key={d.id} style={{borderLeft:`3px solid ${C.red}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
+                        <input value={d.navn} onChange={e=>setEdp(p=>p.map(x=>x.id===d.id?{...x,navn:e.target.value}:x))} style={{background:"transparent",border:"none",color:C.cream,fontSize:14,fontFamily:SERIF,outline:"none",minWidth:240}}/>
+                        <span style={{fontSize:10,padding:"2px 8px",borderRadius:2,background:C.bgDeep,color:C.amber,border:`1px solid ${C.amber}44`}}>NLT {d.nlt}</span>
+                        <span style={{fontSize:10,padding:"2px 8px",borderRadius:2,background:C.redDim,color:C.red,border:`1px solid ${C.red}44`}}>Knyttet COA: {d.coa}</span>
+                      </div>
+                      <div style={{fontSize:12.5,color:C.text,marginBottom:8}}>{d.beskr}</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                        <div><div style={{fontSize:10,color:C.grey,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:3}}>Hviler på fiendens infobehov</div><div style={{fontSize:12,color:C.textDim}}>{ePir.find(p=>p.id===d.knyttet)?.tekst||"—"}</div></div>
+                        <div><div style={{fontSize:10,color:C.green,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:3}}>Vår motrespons</div><div style={{fontSize:12,color:C.green}}>{d.tiltak}</div></div>
+                      </div>
+                    </div>
+                    <Btn onClick={()=>setEdp(p=>p.filter(x=>x.id!==d.id))} variant="danger" style={{padding:"3px 8px"}}>✕</Btn>
+                  </div>
+                </Card>
+              ))}
+            </div>
+            <div style={{marginBottom:28}}><Btn onClick={()=>setEdp(p=>[...p,{id:uid(),navn:"DP-X · Nytt beslutningspunkt",beskr:"Beskriv hva fienden beslutter her.",knyttet:ePir[0]?.id||"",nlt:"D-0",coa:"H?",tiltak:"Definer motrespons"}])}>+ Nytt beslutningspunkt</Btn></div>
+
+            {/* 4 — Enemy ops design */}
+            <div style={{marginBottom:14}}><Eyebrow color={C.red}>4 · Fiendtlig operasjonsdesign — syntese</Eyebrow></div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              {[
+                {k:"schwerpunkt",t:"Tyngdepunkt (Schwerpunkt)",c:C.red},
+                {k:"faser",t:"Faseinndeling",c:C.amber},
+                {k:"forutsetninger",t:"Kritiske forutsetninger",c:C.amber},
+                {k:"sarbarhet",t:"Sårbarheter vi kan utnytte",c:C.green},
+              ].map(f=>(
+                <Card key={f.k} style={{borderTop:`2px solid ${f.c}`}}>
+                  <Eyebrow color={f.c}>{f.t}</Eyebrow>
+                  <TArea value={eOps[f.k]} onChange={v=>setEops(p=>({...p,[f.k]:v}))} style={{marginTop:8,minHeight:74}}/>
+                </Card>
+              ))}
+            </div>
+          </Sec>
+        )}
+
+        {tab==="KI"&&(
+          <Sec eyebrow="Hærens etterretningskonsept 2030 · Kap. 5" title="KI-kontroll" sub="Obligatorisk sjekk før maskinassistert output inngår i beslutningskjeden">
+            <div style={{display:"flex",gap:11,marginBottom:20,alignItems:"stretch",flexWrap:"wrap"}}>
+              <div style={{background:C.card,border:`2px solid ${kiOk?C.green:C.border}`,borderRadius:5,padding:"14px 22px",textAlign:"center",minWidth:120,display:"flex",flexDirection:"column",justifyContent:"center"}}><div style={{fontFamily:SERIF,fontSize:30,color:kiOk?C.green:C.red}}>{kiDoneCount}/7</div><Eyebrow color={kiOk?C.green:C.grey}>{kiOk?"Godkjent":"Avventer"}</Eyebrow></div>
+              <div style={{flex:1,minWidth:240,background:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"14px 18px",display:"flex",alignItems:"center",fontSize:13,color:C.textDim,lineHeight:1.6}}>{kiOk?<span style={{color:C.green}}>✓ KI-output er godkjent for bruk i beslutningskjeden og som ACH-bevis.</span>:<span>KI-output kan <strong style={{color:C.red}}>ikke</strong> inngå i beslutningskjeden eller brukes som ACH-bevis før alle sju punkter er bekreftet.</span>}</div>
+            </div>
+            <div style={{display:"grid",gap:8,marginBottom:24}}>
+              {kiKeys.map((k,i)=>(<div key={k} onClick={()=>setKiDone(p=>({...p,[k]:!p[k]}))} style={{display:"flex",gap:14,alignItems:"flex-start",padding:"13px 16px",borderRadius:4,cursor:"pointer",background:kiDone[k]?C.greenDim:C.card,border:`1px solid ${kiDone[k]?C.green:C.border}`,transition:"all 0.15s"}}><div style={{width:23,height:23,borderRadius:3,border:`2px solid ${kiDone[k]?C.green:C.grey}`,background:kiDone[k]?C.green:"transparent",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",marginTop:1}}>{kiDone[k]&&<span style={{color:C.ink,fontSize:13,fontWeight:900}}>✓</span>}</div><div style={{flex:1}}><div style={{fontWeight:600,fontSize:13,color:kiDone[k]?C.green:C.text,marginBottom:3}}>{i+1}. {kiLabels[i]}</div><div style={{fontSize:11,color:C.grey}}>Ved avvik: {kiActions[i]}</div></div><span style={{fontSize:10,padding:"3px 10px",borderRadius:2,background:kiDone[k]?C.greenDim:C.redDim,color:kiDone[k]?C.green:C.red,fontWeight:700,flexShrink:0,border:`1px solid ${kiDone[k]?C.green:C.red}44`}}>{kiDone[k]?"OK":"GJENSTÅR"}</span></div>))}
+            </div>
+            <Card>
+              <Eyebrow>Klassifikator · Hemmelighet — Mysterium — Kompleksitet</Eyebrow>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(195px,1fr))",gap:11,marginTop:14}}>
+                {[{l:"Hemmelighet",c:C.green,eg:"Hvor er panserbn? Hva er OB?",ki:"Egnet",sat:"OBI · I&W · CARVER"},{l:"Mysterium",c:C.amber,eg:"Hva vil motstanderen gjøre?",ki:"Begrenset",sat:"ACH · KAC · Red Team"},{l:"Kompleksitet",c:C.red,eg:"Hva driver eskalasjonen?",ki:"Svak",sat:"Aktørkart · Scenario"}].map(x=>(<div key={x.l} style={{background:C.bgDeep,borderRadius:4,padding:"12px 14px",borderTop:`3px solid ${x.c}`}}><Eyebrow color={x.c}>{x.l}</Eyebrow><div style={{fontSize:12,color:C.textDim,margin:"7px 0",fontStyle:"italic"}}>"{x.eg}"</div><div style={{fontSize:11,color:C.grey}}>KI: <span style={{color:x.c}}>{x.ki}</span></div><div style={{fontSize:11,color:C.grey}}>SAT: {x.sat}</div></div>))}
+              </div>
+            </Card>
+          </Sec>
+        )}
+      </div>
+
+      {showIntsum&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(20,20,16,0.88)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:24}} onClick={e=>{if(e.target===e.currentTarget)setShowIntsum(false)}}>
+          <div style={{background:C.surface,border:`1px solid ${C.gold}55`,borderRadius:6,maxWidth:780,width:"100%",maxHeight:"86vh",overflowY:"auto"}}>
+            <div style={{textAlign:"center",padding:"6px 0",borderBottom:`1px solid ${C.gold}44`}}><span style={{fontSize:10,letterSpacing:"0.4em",color:C.gold,fontWeight:700}}>T J E N S T L I G</span></div>
+            <div style={{padding:"24px 32px"}}>
+              <div style={{borderBottom:`2px solid ${C.gold}`,paddingBottom:14,marginBottom:22,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><Eyebrow>Intelligence Summary · INTSUM</Eyebrow><div style={{fontFamily:SERIF,fontSize:23,color:C.cream,marginTop:4}}>{sak.title}</div></div><div style={{textAlign:"right",fontSize:11,color:C.textDim}}><div>{sak.dato}</div><div>{sak.analytiker}</div></div></div>
+              <div style={{marginBottom:18}}><Eyebrow>Prioriterte etterretningsbehov</Eyebrow><div style={{fontSize:13,color:C.text,marginTop:8}}>PIR-1: {sak.pir1}</div><div style={{fontSize:13,color:C.text,marginTop:3}}>PIR-2: {sak.pir2}</div></div>
+              <div style={{marginBottom:18}}><Eyebrow color={C.amber}>Indikasjonsstatus</Eyebrow>{["KRITISK","FORHØYET"].map(s=>{const it=iwItems.filter(i=>i.status===s);if(!it.length)return null;return(<div key={s} style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:STATUS_C[s]}}>{s} ({it.length})</div>{it.map(i=><div key={i.id} style={{fontSize:12.5,color:C.text,paddingLeft:14,marginTop:3}}>· {i.tekst} — {i.sensor}, {i.obs}</div>)}</div>);})}</div>
+              <div style={{marginBottom:18,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><div style={{background:C.greenDim,border:`1px solid ${C.green}55`,borderRadius:4,padding:"12px 14px"}}><Eyebrow color={C.green}>MSHEM</Eyebrow><div style={{fontFamily:SERIF,fontSize:15,color:C.cream,margin:"5px 0"}}>{bestH?.title}</div><div style={{fontSize:11,color:C.textDim}}>ACH +{bestH?hypoScores[bestH.id]:0}</div></div><div style={{background:C.redDim,border:`1px solid ${C.red}55`,borderRadius:4,padding:"12px 14px"}}><Eyebrow color={C.red}>FHEM</Eyebrow><div style={{fontFamily:SERIF,fontSize:15,color:C.cream,margin:"5px 0"}}>{fhem?.title}</div><div style={{fontSize:11,color:C.textDim}}>Uavhengig av score</div></div></div>
+              {carverSorted[0]&&<div style={{marginBottom:18}}><Eyebrow color={C.gold}>Høyest prioritert mål · CARVER</Eyebrow><div style={{fontSize:13,color:C.text,marginTop:8}}>{carverSorted[0].name} — sum <span style={{color:C.green,fontWeight:700}}>{carverSorted[0].sum}/60</span></div></div>}
+              {icp.length>0&&<div style={{marginBottom:18}}><Eyebrow color={C.gold}>Innhentingsplan · {icp.length} oppdrag</Eyebrow>{icp.slice(0,4).map(r=><div key={r.id} style={{fontSize:12.5,color:C.text,paddingLeft:14,marginTop:4}}>· <strong>{r.nai}</strong> — SIR: {r.sir} <span style={{color:C.grey}}>({(r.eei||[]).length} EEI · {r.sensors.split(" / ")[0]} · LTIOV {r.ltiov})</span></div>)}</div>}
+              <div style={{marginBottom:18}}><Eyebrow color={C.green}>Order of Battle · {objects.length} objekter</Eyebrow>{objects.map(o=><div key={o.id} style={{fontSize:12.5,color:C.text,paddingLeft:14,marginTop:3}}>· {o.name} — {o.aktivitet} — {o.kilde}{o.info}/{o.disiplin}</div>)}</div>
+              <div style={{background:kiOk?C.greenDim:C.redDim,border:`1px solid ${kiOk?C.green:C.red}44`,borderRadius:4,padding:"10px 14px",marginBottom:20}}><div style={{fontSize:12.5,color:kiOk?C.green:C.red,fontWeight:600}}>KI-kontroll: {kiOk?"✓ Godkjent – output validert":`⚠ Ikke fullstendig – ${kiDoneCount}/7 utført`}</div></div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:11,color:C.grey}}>UGRADERT · {sak.dato}</span><div style={{display:"flex",gap:8}}><Btn onClick={exportIntsum}>Last ned INTSUM (.txt)</Btn><Btn onClick={()=>setShowIntsum(false)} variant="primary" style={{padding:"8px 22px"}}>Lukk</Btn></div></div>
+            </div>
+            <div style={{textAlign:"center",padding:"6px 0",borderTop:`1px solid ${C.gold}44`}}><span style={{fontSize:10,letterSpacing:"0.4em",color:C.gold,fontWeight:700}}>T J E N S T L I G</span></div>
+          </div>
+        </div>
+      )}
+
+      <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.55}}input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:${C.bgDeep}}::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px}select option{color:${C.text}}`}</style>
+    </div>
+  );
+}
